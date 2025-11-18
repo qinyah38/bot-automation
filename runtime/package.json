@@ -1,0 +1,23 @@
+{
+  "name": "bot-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node --enable-source-maps dist/index.js",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.3",
+    "dotenv": "^16.4.5",
+    "pino": "^9.2.0",
+    "whatsapp-web.js": "^1.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "pino-pretty": "^11.2.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.5"
+  }
+}

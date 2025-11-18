@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import {
   Form,
@@ -35,7 +35,7 @@ type RegisterNumberFormValues = {
 type RegisterNumberDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: RegisterNumberFormValues) => void;
+  onSubmit: (values: RegisterNumberFormValues) => Promise<void> | void;
 };
 
 const REGION_OPTIONS = [
@@ -52,6 +52,7 @@ export function RegisterNumberDialog({
   onOpenChange,
   onSubmit,
 }: RegisterNumberDialogProps) {
+  const [submitting, setSubmitting] = useState(false);
   const form = useForm<RegisterNumberFormValues>({
     defaultValues: {
       displayName: "",
@@ -74,9 +75,14 @@ export function RegisterNumberDialog({
     }
   }, [form, open]);
 
-  const handleSubmit = (values: RegisterNumberFormValues) => {
-    onSubmit(values);
-    onOpenChange(false);
+  const handleSubmit = async (values: RegisterNumberFormValues) => {
+    try {
+      setSubmitting(true);
+      await onSubmit(values);
+      onOpenChange(false);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -202,7 +208,9 @@ export function RegisterNumberDialog({
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button type="submit">Register number</Button>
+              <Button type="submit" disabled={submitting}>
+                {submitting ? "Registering…" : "Register number"}
+              </Button>
             </DialogFooter>
           </form>
         </Form>

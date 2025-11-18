@@ -29,7 +29,7 @@ export type WhatsAppNumber = {
   createdAt: string;
 };
 
-type CreateNumberInput = {
+type RegisterNumberInput = {
   phoneNumber: string;
   displayName: string;
   region: string;
@@ -39,26 +39,18 @@ type CreateNumberInput = {
 
 type NumbersContextValue = {
   numbers: WhatsAppNumber[];
-  createNumber: (input: CreateNumberInput) => WhatsAppNumber;
+  registerNumber: (input: RegisterNumberInput) => Promise<WhatsAppNumber>;
   updateNumberStatus: (
     id: string,
     status: NumberStatus,
     metadata?: Partial<Pick<WhatsAppNumber, "lastSeen" | "qrExpiresAt" | "notes">>,
   ) => void;
   assignNumberToBot: (numberId: string, botId: string, assign: boolean) => void;
-  regenerateQr: (numberId: string) => void;
-  markQrScanned: (numberId: string) => void;
+  regenerateQr: (numberId: string) => Promise<void>;
+  markQrScanned: (numberId: string) => Promise<void>;
 };
 
 const NumbersContext = createContext<NumbersContextValue | undefined>(undefined);
-
-function createRandomId() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function mockQrSvg(text: string) {
-  return `QRCode:${text}`;
-}
 
 function formatLastSeen(status: NumberStatus): string {
   switch (status) {
@@ -84,6 +76,7 @@ type DbNumberRow = {
   notes: string | null;
   last_connected_at: string | null;
   created_at: string;
+  auto_assign_preferred?: boolean | null;
   number_bot_deployments: Array<{
     status: string;
     bot_version_id: string | null;
@@ -98,7 +91,10 @@ function mapDbNumber(row: DbNumberRow): WhatsAppNumber {
     suspended: "Suspended",
   };
   const status = statusMap[row.status as keyof typeof statusMap] ?? "Disconnected";
-  const assignedBotIds: string[] = [];
+  const assignedBotIds =
+    row.number_bot_deployments
+      ?.filter((deployment) => deployment.status === "active" && Boolean(deployment.bot_version_id))
+      .map((deployment) => deployment.bot_version_id as string) ?? [];
 
   return {
     id: row.id,
@@ -114,7 +110,7 @@ function mapDbNumber(row: DbNumberRow): WhatsAppNumber {
     qrExpiresAt: undefined,
     qrSvg: undefined,
     assignedBotIds,
-    autoAssignPreferred: false,
+    autoAssignPreferred: row.auto_assign_preferred ?? false,
     createdAt: row.created_at,
   };
 }
@@ -140,6 +136,7 @@ export function NumbersProvider({ children }: { children: ReactNode }) {
         notes,
         last_connected_at,
         created_at,
+        auto_assign_preferred,
         number_bot_deployments:number_bot_deployments_number_id_fkey (
           status,
           bot_version_id
@@ -173,29 +170,80 @@ export function NumbersProvider({ children }: { children: ReactNode }) {
     refreshNumbers();
   }, [refreshNumbers, user]);
 
-  const createNumber = useCallback(
-    ({ phoneNumber, displayName, region, notes, autoAssignPreferred = true }: CreateNumberInput) => {
-      const id = `number-${createRandomId()}`;
-      const status: NumberStatus = "Pending QR";
-      const newNumber: WhatsAppNumber = {
-        id,
-        phoneNumber,
-        displayName,
-        region,
-        status,
-        lastSeen: formatLastSeen(status),
-        notes,
-        qrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-        qrSvg: mockQrSvg(phoneNumber),
-        assignedBotIds: [],
-        autoAssignPreferred,
-        createdAt: new Date().toISOString(),
-      };
+  const registerNumber = useCallback(
+    async ({
+      phoneNumber,
+      displayName,
+      region,
+      notes,
+      autoAssignPreferred = true,
+    }: RegisterNumberInput) => {
+      let handledError = false;
+      try {
+        const response = await fetch("/api/numbers", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            phoneNumber: phoneNumber.trim(),
+            displayName: displayName.trim(),
+            region: region.trim(),
+            notes: notes?.trim(),
+            autoAssignPreferred,
+          }),
+        });
 
-      setNumbers((prev) => [newNumber, ...prev]);
-      return newNumber;
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({}));
+          const message =
+            typeof errorBody?.error === "string"
+              ? errorBody.error
+              : "Failed to register number.";
+          handledError = true;
+          toast({
+            title: "Registration failed",
+            description: message,
+            intent: "error",
+          });
+          throw new Error(message);
+        }
+
+        const payload = await response.json();
+        const mapped = mapDbNumber(payload.number);
+
+        setNumbers((prev) => {
+          const withoutDrafts = prev.filter(
+            (number) =>
+              !(number.id.startsWith("number-") && number.phoneNumber === mapped.phoneNumber),
+          );
+          const withoutDuplicate = withoutDrafts.filter((number) => number.id !== mapped.id);
+          return [mapped, ...withoutDuplicate];
+        });
+
+        void refreshNumbers();
+
+        toast({
+          title: "Number registered",
+          description: `${displayName} is ready for onboarding.`,
+        });
+
+        return mapped;
+      } catch (error) {
+        if (error instanceof Error) {
+          if (!handledError) {
+            toast({
+              title: "Registration failed",
+              description: error.message || "An unexpected error occurred.",
+              intent: "error",
+            });
+          }
+          throw error;
+        }
+        throw new Error("Failed to register number");
+      }
     },
-    [],
+    [refreshNumbers, toast],
   );
 
   const updateNumberStatus = useCallback(
@@ -239,47 +287,83 @@ export function NumbersProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const regenerateQr = useCallback((numberId: string) => {
-    setNumbers((prev) =>
-      prev.map((number) =>
-        number.id === numberId
-          ? {
-              ...number,
-              status: "Pending QR",
-              qrExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-              qrSvg: mockQrSvg(`${number.phoneNumber}-${Date.now()}`),
-              lastSeen: "QR regenerated",
-            }
-          : number,
-      ),
-    );
-  }, []);
+  const regenerateQr = useCallback(
+    async (numberId: string) => {
+      setNumbers((prev) =>
+        prev.map((number) =>
+          number.id === numberId
+            ? { ...number, status: "Pending QR", qrExpiresAt: undefined, qrSvg: undefined }
+            : number,
+        ),
+      );
 
-  const markQrScanned = useCallback((numberId: string) => {
-    setNumbers((prev) =>
-      prev.map((number) =>
-        number.id === numberId
-          ? {
-              ...number,
-              status: "Connected",
-              lastSeen: "Connected just now",
-              qrExpiresAt: undefined,
-            }
-          : number,
-      ),
-    );
-  }, []);
+      const response = await fetch(`/api/numbers/${numberId}/session/restart`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        const message =
+          typeof body?.error === "string" ? body.error : "Failed to request QR regeneration.";
+        toast({
+          title: "Unable to regenerate QR",
+          description: message,
+          intent: "error",
+        });
+      } else {
+        toast({
+          title: "QR regeneration requested",
+          description: "Check back in a few moments for a new code.",
+        });
+      }
+    },
+    [toast],
+  );
+
+  const markQrScanned = useCallback(
+    async (numberId: string) => {
+      const response = await fetch(`/api/numbers/${numberId}/session/mark-scanned`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        const message =
+          typeof body?.error === "string" ? body.error : "Failed to mark QR as scanned.";
+        toast({
+          title: "Unable to mark scanned",
+          description: message,
+          intent: "error",
+        });
+        return;
+      }
+
+      setNumbers((prev) =>
+        prev.map((number) =>
+          number.id === numberId
+            ? {
+                ...number,
+                status: "Connected",
+                lastSeen: "Connected just now",
+                qrExpiresAt: undefined,
+              }
+            : number,
+        ),
+      );
+    },
+    [toast],
+  );
 
   const value = useMemo<NumbersContextValue>(
     () => ({
       numbers,
-      createNumber,
+      registerNumber,
       updateNumberStatus,
       assignNumberToBot,
       regenerateQr,
       markQrScanned,
     }),
-    [assignNumberToBot, createNumber, markQrScanned, numbers, regenerateQr, updateNumberStatus],
+    [assignNumberToBot, markQrScanned, numbers, regenerateQr, registerNumber, updateNumberStatus],
   );
 
   return <NumbersContext.Provider value={value}>{children}</NumbersContext.Provider>;

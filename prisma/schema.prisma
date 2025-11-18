@@ -1,0 +1,504 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  active
+  pending_invite
+  suspended
+}
+
+enum BotVersionStatus {
+  draft
+  published
+  archived
+}
+
+enum DeploymentStatus {
+  active
+  superseded
+  rolled_back
+}
+
+enum TemplateVersionStatus {
+  draft
+  published
+  deprecated
+}
+
+enum NumberStatus {
+  pending_qr
+  connected
+  disconnected
+  suspended
+}
+
+enum SessionState {
+  pending_qr
+  ready
+  reconnecting
+  error
+}
+
+enum ConversationStatus {
+  open
+  snoozed
+  closed
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+  system
+}
+
+enum ExportStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
+enum IntegrationStatus {
+  active
+  disabled
+  error
+}
+
+enum AlertStatus {
+  open
+  acknowledged
+  resolved
+}
+
+model User {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  email               String                  @unique @db.Citext
+  displayName         String                  @map("display_name")
+  status              UserStatus              @default(pending_invite)
+  lastLoginAt         DateTime?               @map("last_login_at") @db.Timestamptz(6)
+  metadata            Json                    @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                @default(now()) @map("updated_at") @db.Timestamptz(6)
+  userRoles           UserRole[]              @relation("UserRoleUser")
+  assignedRoles       UserRole[]              @relation("UserRoleAssignedBy")
+  apiTokens           ApiToken[]              @relation("UserApiTokens")
+  ownedBots           Bot[]                   @relation("BotOwner")
+  botVersions         BotVersion[]            @relation("BotVersionCreatedBy")
+  actionTemplates     ActionTemplate[]        @relation("ActionTemplateCreatedBy")
+  ownedNumbers        Number[]                @relation("NumberOwner")
+  deploymentsAssigned NumberBotDeployment[]   @relation("NumberDeploymentAssignedBy")
+  tagsApplied         ConversationTag[]       @relation("ConversationTagAppliedBy")
+  notesAuthored       ConversationNote[]      @relation("ConversationNoteAuthor")
+  exportsRequested    ConversationExport[]    @relation("ConversationExportRequestedBy")
+  integrations        Integration[]           @relation("IntegrationCreatedBy")
+  alertsResolved      Alert[]                 @relation("AlertResolvedBy")
+  auditLogs           AuditLogEntry[]         @relation("AuditLogActor")
+  flagOverrides       FeatureFlagOverride[]   @relation("FeatureFlagOverrideCreatedBy")
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  userRoles   UserRole[] @relation("UserRoleRole")
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId     String   @map("user_id") @db.Uuid
+  roleId     String   @map("role_id") @db.Uuid
+  assignedBy String?  @map("assigned_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user            User  @relation("UserRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  role            Role  @relation("UserRoleRole", fields: [roleId], references: [id], onDelete: Cascade)
+  assignedByUser  User? @relation("UserRoleAssignedBy", fields: [assignedBy], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model ApiToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  name         String
+  hashedSecret String    @map("hashed_secret")
+  lastUsedAt   DateTime? @map("last_used_at") @db.Timestamptz(6)
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(6)
+  scopes       String[]  @db.Text @default(dbgenerated("'{}'::text[]"))
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation("UserApiTokens", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_tokens")
+}
+
+model Bot {
+  id               String      @id @default(uuid()) @db.Uuid
+  name             String      @unique
+  description      String?
+  defaultLocale    String?     @map("default_locale")
+  ownerId          String?     @map("owner_id") @db.Uuid
+  currentVersionId String?     @map("current_version_id") @db.Uuid @unique
+  archivedAt       DateTime?   @map("archived_at") @db.Timestamptz(6)
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  owner          User?        @relation("BotOwner", fields: [ownerId], references: [id])
+  botVersions    BotVersion[] @relation("BotToBotVersions")
+  currentVersion BotVersion?  @relation("BotCurrentVersion", fields: [currentVersionId], references: [id])
+  webhookSubscriptions WebhookSubscription[] @relation("BotWebhookSubscriptions")
+  analyticsEvents      AnalyticsEvent[]      @relation("BotAnalyticsEvents")
+
+  @@map("bots")
+}
+
+model BotVersion {
+  id               String          @id @default(uuid()) @db.Uuid
+  botId            String          @map("bot_id") @db.Uuid
+  versionNumber    Int             @map("version_number")
+  status           BotVersionStatus @default(draft)
+  flowDefinition   Json            @map("flow_definition") @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  validationErrors Json?           @map("validation_errors") @db.JsonB
+  changeSummary    String?         @map("change_summary")
+  createdBy        String?         @map("created_by") @db.Uuid
+  publishedAt      DateTime?       @map("published_at") @db.Timestamptz(6)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  bot              Bot             @relation("BotToBotVersions", fields: [botId], references: [id], onDelete: Cascade)
+  creator          User?           @relation("BotVersionCreatedBy", fields: [createdBy], references: [id])
+  currentForBot    Bot?            @relation("BotCurrentVersion")
+  deployments      NumberBotDeployment[] @relation("BotVersionDeployments")
+  conversations    Conversation[]        @relation("BotVersionConversations")
+
+  @@unique([botId, versionNumber])
+  @@map("bot_versions")
+}
+
+model ActionTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  slug        String   @unique
+  name        String
+  category    String?
+  description String?
+  isSystem    Boolean  @map("is_system") @default(false)
+  createdBy   String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  creator User? @relation("ActionTemplateCreatedBy", fields: [createdBy], references: [id])
+  versions ActionTemplateVersion[] @relation("ActionTemplateVersions")
+
+  @@map("action_templates")
+}
+
+model ActionTemplateVersion {
+  id               String                @id @default(uuid()) @db.Uuid
+  actionTemplateId String                @map("action_template_id") @db.Uuid
+  versionNumber    Int                   @map("version_number")
+  status           TemplateVersionStatus @default(draft)
+  inputSchema      Json                  @map("input_schema") @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  outputSchema     Json?                 @map("output_schema") @db.JsonB
+  uiSchema         Json?                 @map("ui_schema") @db.JsonB
+  samplePayload    Json?                 @map("sample_payload") @db.JsonB
+  metadata         Json?                 @db.JsonB
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  template ActionTemplate @relation("ActionTemplateVersions", fields: [actionTemplateId], references: [id], onDelete: Cascade)
+
+  @@unique([actionTemplateId, versionNumber])
+  @@map("action_template_versions")
+}
+
+model Number {
+  id                 String               @id @default(uuid()) @db.Uuid
+  phoneNumber        String               @map("phone_number") @unique
+  displayName        String?              @map("display_name")
+  region             String?
+  ownerId            String?              @map("owner_id") @db.Uuid
+  status             NumberStatus         @default(pending_qr)
+  lastConnectedAt    DateTime?            @map("last_connected_at") @db.Timestamptz(6)
+  notes              String?
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  owner            User?                 @relation("NumberOwner", fields: [ownerId], references: [id])
+  deployments      NumberBotDeployment[] @relation("NumberToDeployments")
+  activeDeploymentId String?              @map("active_deployment_id") @db.Uuid @unique
+  activeDeployment NumberBotDeployment?  @relation("NumberActiveDeployment", fields: [activeDeploymentId], references: [id])
+  session          NumberSession?        @relation("NumberSession")
+  connectionEvents NumberConnectionEvent[] @relation("NumberConnectionEvents")
+  conversations    Conversation[]        @relation("NumberConversations")
+  analyticsEvents  AnalyticsEvent[]      @relation("NumberAnalyticsEvents")
+
+  @@map("numbers")
+}
+
+model NumberSession {
+  id               String      @id @default(uuid()) @db.Uuid
+  numberId         String      @unique @map("number_id") @db.Uuid
+  sessionState     SessionState @map("session_state") @default(pending_qr)
+  qrToken          String?     @map("qr_token")
+  qrExpiresAt      DateTime?   @map("qr_expires_at") @db.Timestamptz(6)
+  sessionFilePath  String?     @map("session_file_path")
+  lastError        String?     @map("last_error")
+  runtimeMetadata  Json?       @map("runtime_metadata") @db.JsonB
+  updatedAt        DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  number Number @relation("NumberSession", fields: [numberId], references: [id], onDelete: Cascade)
+
+  @@map("number_sessions")
+}
+
+model NumberConnectionEvent {
+  id         BigInt   @id @default(autoincrement())
+  numberId   String   @map("number_id") @db.Uuid
+  eventType  String   @map("event_type")
+  payload    Json     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  number Number @relation("NumberConnectionEvents", fields: [numberId], references: [id], onDelete: Cascade)
+
+  @@map("number_connection_events")
+}
+
+model NumberBotDeployment {
+  id             String           @id @default(uuid()) @db.Uuid
+  numberId       String           @map("number_id") @db.Uuid
+  botVersionId   String?          @map("bot_version_id") @db.Uuid
+  assignedBy     String?          @map("assigned_by") @db.Uuid
+  status         DeploymentStatus @default(active)
+  effectiveAt    DateTime         @default(now()) @map("effective_at") @db.Timestamptz(6)
+  endedAt        DateTime?        @map("ended_at") @db.Timestamptz(6)
+  notes          String?
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  number         Number           @relation("NumberToDeployments", fields: [numberId], references: [id], onDelete: Cascade)
+  botVersion     BotVersion?      @relation("BotVersionDeployments", fields: [botVersionId], references: [id])
+  assignedByUser User?            @relation("NumberDeploymentAssignedBy", fields: [assignedBy], references: [id])
+  activeForNumber Number?         @relation("NumberActiveDeployment")
+
+  @@map("number_bot_deployments")
+}
+
+model Conversation {
+  id             String             @id @default(uuid()) @db.Uuid
+  numberId       String             @map("number_id") @db.Uuid
+  botVersionId   String?            @map("bot_version_id") @db.Uuid
+  customerWaId   String             @map("customer_wa_id")
+  status         ConversationStatus @default(open)
+  openedAt       DateTime           @default(now()) @map("opened_at") @db.Timestamptz(6)
+  closedAt       DateTime?          @map("closed_at") @db.Timestamptz(6)
+  lastMessageAt  DateTime?          @map("last_message_at") @db.Timestamptz(6)
+  currentState   Json?              @map("current_state") @db.JsonB
+  metadata       Json?              @db.JsonB
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  number     Number      @relation("NumberConversations", fields: [numberId], references: [id], onDelete: Cascade)
+  botVersion BotVersion? @relation("BotVersionConversations", fields: [botVersionId], references: [id])
+  messages   Message[]   @relation("ConversationMessages")
+  tags       ConversationTag[] @relation("ConversationTags")
+  notes      ConversationNote[] @relation("ConversationNotes")
+  analyticsEvents AnalyticsEvent[] @relation("ConversationAnalyticsEvents")
+
+  @@map("conversations")
+}
+
+model Message {
+  id                 String           @id @default(uuid()) @db.Uuid
+  conversationId     String           @map("conversation_id") @db.Uuid
+  direction          MessageDirection
+  messageType        String           @map("message_type") @default("text")
+  payload            Json             @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  sentAt             DateTime         @default(now()) @map("sent_at") @db.Timestamptz(6)
+  deliveryStatus     String?          @map("delivery_status")
+  errorDetails       Json?            @map("error_details") @db.JsonB
+  integrationContext Json?            @map("integration_context") @db.JsonB
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation("ConversationMessages", fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model ConversationTag {
+  id             String    @id @default(uuid()) @db.Uuid
+  conversationId String    @map("conversation_id") @db.Uuid
+  tag            String
+  appliedBy      String?   @map("applied_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation("ConversationTags", fields: [conversationId], references: [id], onDelete: Cascade)
+  appliedByUser User?       @relation("ConversationTagAppliedBy", fields: [appliedBy], references: [id])
+
+  @@unique([conversationId, tag])
+  @@map("conversation_tags")
+}
+
+model ConversationNote {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  body           String
+  visibility     String   @default("internal")
+  authorId       String?  @map("author_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation Conversation @relation("ConversationNotes", fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation("ConversationNoteAuthor", fields: [authorId], references: [id])
+
+  @@map("conversation_notes")
+}
+
+model ConversationExport {
+  id              String       @id @default(uuid()) @db.Uuid
+  requestedBy     String?      @map("requested_by") @db.Uuid
+  filter          Json         @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  destinationType String       @map("destination_type")
+  status          ExportStatus @default(queued)
+  resultLocation  String?      @map("result_location")
+  errorDetails    Json?        @map("error_details") @db.JsonB
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  completedAt     DateTime?    @map("completed_at") @db.Timestamptz(6)
+
+  requester User? @relation("ConversationExportRequestedBy", fields: [requestedBy], references: [id])
+
+  @@map("conversation_exports")
+}
+
+model Integration {
+  id              String            @id @default(uuid()) @db.Uuid
+  type            String
+  displayName     String            @map("display_name")
+  status          IntegrationStatus @default(active)
+  config          Json              @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  secretReference String?           @map("secret_reference")
+  lastSyncAt      DateTime?         @map("last_sync_at") @db.Timestamptz(6)
+  lastErrorAt     DateTime?         @map("last_error_at") @db.Timestamptz(6)
+  createdBy       String?           @map("created_by") @db.Uuid
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  creator User? @relation("IntegrationCreatedBy", fields: [createdBy], references: [id])
+  events  IntegrationEvent[]      @relation("IntegrationEvents")
+  webhookSubscriptions WebhookSubscription[] @relation("IntegrationWebhookSubscriptions")
+
+  @@map("integrations")
+}
+
+model IntegrationEvent {
+  id             BigInt   @id @default(autoincrement())
+  integrationId  String   @map("integration_id") @db.Uuid
+  eventType      String   @map("event_type")
+  payload        Json     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  integration Integration @relation("IntegrationEvents", fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@map("integration_events")
+}
+
+model WebhookSubscription {
+  id             String   @id @default(uuid()) @db.Uuid
+  botId          String?  @map("bot_id") @db.Uuid
+  integrationId  String?  @map("integration_id") @db.Uuid
+  event          String
+  targetUrl      String   @map("target_url")
+  headers        Json?    @db.JsonB
+  status         String   @default("active")
+  retryPolicy    Json?    @map("retry_policy") @db.JsonB
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  bot         Bot?         @relation("BotWebhookSubscriptions", fields: [botId], references: [id], onDelete: Cascade)
+  integration Integration? @relation("IntegrationWebhookSubscriptions", fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@map("webhook_subscriptions")
+}
+
+model AnalyticsEvent {
+  id             BigInt   @id @default(autoincrement())
+  occurredAt     DateTime @map("occurred_at") @db.Timestamptz(6)
+  eventType      String   @map("event_type")
+  botId          String?  @map("bot_id") @db.Uuid
+  numberId       String?  @map("number_id") @db.Uuid
+  conversationId String?  @map("conversation_id") @db.Uuid
+  payload        Json     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  ingestedAt     DateTime @default(now()) @map("ingested_at") @db.Timestamptz(6)
+
+  bot          Bot?          @relation("BotAnalyticsEvents", fields: [botId], references: [id])
+  number       Number?       @relation("NumberAnalyticsEvents", fields: [numberId], references: [id])
+  conversation Conversation? @relation("ConversationAnalyticsEvents", fields: [conversationId], references: [id])
+
+  @@map("analytics_events")
+}
+
+model Alert {
+  id           String      @id @default(uuid()) @db.Uuid
+  type         String
+  severity     String
+  status       AlertStatus @default(open)
+  context      Json        @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  triggeredAt  DateTime    @default(now()) @map("triggered_at") @db.Timestamptz(6)
+  resolvedAt   DateTime?   @map("resolved_at") @db.Timestamptz(6)
+  resolvedBy   String?     @map("resolved_by") @db.Uuid
+
+  resolver User? @relation("AlertResolvedBy", fields: [resolvedBy], references: [id])
+
+  @@map("alerts")
+}
+
+model AuditLogEntry {
+  id         BigInt   @id @default(autoincrement())
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id") @db.Uuid
+  metadata   Json     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor User? @relation("AuditLogActor", fields: [actorId], references: [id])
+
+  @@map("audit_log_entries")
+}
+
+model FeatureFlag {
+  key          String   @id
+  description  String?
+  defaultValue Boolean  @map("default_value") @default(false)
+  metadata     Json?    @db.JsonB
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  overrides    FeatureFlagOverride[] @relation("FeatureFlagOverrides")
+
+  @@map("feature_flags")
+}
+
+model FeatureFlagOverride {
+  id         String   @id @default(uuid()) @db.Uuid
+  flagKey    String   @map("flag_key")
+  targetType String   @map("target_type")
+  targetId   String   @map("target_id") @db.Uuid
+  value      Boolean
+  createdBy  String?  @map("created_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  flag    FeatureFlag @relation("FeatureFlagOverrides", fields: [flagKey], references: [key], onDelete: Cascade)
+  creator User?       @relation("FeatureFlagOverrideCreatedBy", fields: [createdBy], references: [id])
+
+  @@unique([flagKey, targetType, targetId])
+  @@map("feature_flag_overrides")
+}

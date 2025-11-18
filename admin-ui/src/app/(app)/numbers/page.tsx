@@ -26,7 +26,7 @@ const STATUS_BADGE: Record<string, "default" | "secondary" | "outline"> = {
 export default function NumbersPage() {
   const {
     numbers,
-    createNumber,
+    registerNumber,
     updateNumberStatus,
     assignNumberToBot,
     regenerateQr,
@@ -171,9 +171,13 @@ export default function NumbersPage() {
       <RegisterNumberDialog
         open={registerOpen}
         onOpenChange={setRegisterOpen}
-        onSubmit={(values) => {
-          const newNumber = createNumber(values);
-          setOnboardingNumber(newNumber.id);
+        onSubmit={async (values) => {
+          try {
+            const newNumber = await registerNumber(values);
+            setOnboardingNumber(newNumber.id);
+          } catch (error) {
+            console.error("Failed to register number", error);
+          }
         }}
       />
 

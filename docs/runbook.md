@@ -15,6 +15,14 @@ Keep these steps lightweight so you can bootstrap local work quickly while the s
   - `npm run dev` to launch the NeoSketch admin UI at `http://localhost:3000`.
   - All theming comes from `src/app/globals.css` and `docs/neo-sketch-design-system.md`; update tokens there before tweaking components.
 
+### Version Control Workflow
+- Default branch is `main`; keep it deployable and protect it with required checks.
+- For every task branch from the latest `main`: `git pull origin main && git checkout -b feature/<task>`.
+- Commit locally, push the branch (`git push -u origin feature/<task>`), and open a PR when the task is ready.
+- Rebase on `main` before merge (`git fetch origin && git rebase origin/main`) to resolve conflicts early, then squash-merge for a tidy history.
+- Delete merged feature branches both remotely and locally to avoid clutter.
+- Only create `hotfix/<issue>` branches when production is broken; merge them back into `main` immediately after the fix ships.
+
 ## 2. Deployment Checklist
 - Confirm Supabase migrations are up to date: run `supabase db push` or apply SQL scripts via the dashboard.
 - Verify environment secrets in hosting provider: Supabase keys, Redis URL, session storage path, third-party webhooks.

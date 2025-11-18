@@ -42,7 +42,7 @@ export default function BotWizardPage() {
   } = useBots();
   const {
     numbers,
-    createNumber,
+    registerNumber,
     assignNumberToBot,
     regenerateQr,
     markQrScanned,
@@ -437,9 +437,13 @@ export default function BotWizardPage() {
       <RegisterNumberDialog
         open={registerDialogOpen}
         onOpenChange={setRegisterDialogOpen}
-        onSubmit={(values) => {
-          const newNumber = createNumber(values);
-          setOnboardingNumberId(newNumber.id);
+        onSubmit={async (values) => {
+          try {
+            const newNumber = await registerNumber(values);
+            setOnboardingNumberId(newNumber.id);
+          } catch (error) {
+            console.error("Failed to register number", error);
+          }
         }}
       />
 
